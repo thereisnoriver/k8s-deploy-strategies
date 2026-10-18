@@ -1,21 +1,82 @@
-##1주차: 롤링 업데이트 기초 + 장애 실험
-| 요일    | 목표                         | 세부 내용                                                                                       |
-| ----- | -------------------------- | ------------------------------------------------------------------------------------------- |
-| Day 1 | 실험 환경 구성                   | - 포트 변경 (8080 → 8090)<br>- v1 앱 배포<br>- 기본 `/version` 응답 확인                                 |
-| Day 2 | 롤링 업데이트 흐름 익히기             | - `kubectl set image`로 v2 배포<br>- 응답 `"v1"` → `"v2"` 변하는지 확인                                |
-| Day 3 | 파드 수 늘려 순차적 롤링 확인          | - `replicas: 4~5`<br>- `maxUnavailable`, `maxSurge` 조정<br>- `watch get pods`, `curl`로 동작 확인 |
-| Day 4 | readinessProbe 없이 실패 유도 실험 | - v2에 `Random()` 기반 에러 삽입<br>- 일부 파드 실패 발생<br>- `curl`, `get pods`로 확인                      |
-| Day 5 | `readinessProbe` 추가 후 재실험  | - 응답 안정화 확인<br>- readiness 동작 검증                                                            |
-| Day 6 | 전체 파드 죽는 경우 실험             | - `System.exit(1)` 삽입<br>- `CrashLoopBackOff` 확인<br>- `rollout undo` 실습                     |
-| Day 7 | 일부만 죽는 경우 실험               | - 일부 파드만 죽는 조건 조작<br>- 라벨/리소스 편차 등 실험<br>- 대응 전략 검토                                         |
+# Kubernetes Deployment Strategies — Study Notes
 
-##2주차: 고급 시나리오 + 문제 해결 실험
-| 요일     | 목표               | 세부 내용                                                               |
-| ------ | ---------------- | ------------------------------------------------------------------- |
-| Day 8  | 실무 장애 사례 재현 ①    | - ConfigMap 변경 중 롤링 실패<br>- live 변경 문제 실험                           |
-| Day 9  | 실무 장애 사례 재현 ②    | - readinessProbe은 OK인데 실제 에러 응답<br>- 로그 파싱, `startupProbe` 필요 여부 검토 |
-| Day 10 | 리소스 편차 시나리오 실험   | - CPU 제한 조절<br>- 응답 지연 유도 + timeout 발생                              |
-| Day 11 | 롤링 업데이트 튜닝 실험    | - `maxSurge`, `maxUnavailable` 값 실험<br>- 가용성/속도 트레이드오프              |
-| Day 12 | 실험 결과 수집 + 로그 정리 | - `docs/01_rolling.md` 정리<br>- 실험별 명령어, 로그, 결과 정리                   |
-| Day 13 | 블로그 초안 작성        | - 실험 요약, 기술적 교훈, 문제 해결 과정 정리                                        |
-| Day 14 | 마무리 + 피드백 반영     | - 기록 마감<br>- 포트폴리오, 이력서 문장화 준비                                      |
+**Status: conceptual study and unfinished example scaffolding — not an executed deployment experiment.**
+
+This repository collects notes on deployment and rollout strategies in Kubernetes. It was created to organize the ideas behind **rolling updates, blue-green deployment, and canary releases** and to plan possible failure and recovery experiments.
+
+There are some illustrative YAML manifests and a small Spring Boot `/version` endpoint, but **no verified Kubernetes cluster runs, rollout logs, fault-injection results, or measured performance data** are included. The original 14-day exercise schedule is preserved in [docs/ORIGINAL_STUDY_PLAN.md](docs/ORIGINAL_STUDY_PLAN.md) as a **plan, not a completion log**.
+
+## Strategy comparison
+
+| Strategy | Concept | Main trade-off | Validation question |
+| --- | --- | --- | --- |
+| **Rolling update** | Gradually replace old Pods with new Pods in a Deployment. | Trades rollout speed, temporary capacity, and availability; behavior depends on readiness and `maxSurge`/`maxUnavailable`. | When is an updated Pod actually ready to serve requests? |
+| **Blue-green** | Prepare a separate new version and switch the Service's target traffic after validation. | Fast switching/rollback is possible, but running both environments costs capacity and requires careful selector management. | Does the switch isolate users from an unhealthy release? |
+| **Canary** | Run a small new-version subset alongside the stable version and gradually expand exposure. | Reduces initial exposure but needs monitoring; basic Service/replica proportions are not precise per-user traffic guarantees. | What signals should block canary expansion or trigger rollback? |
+
+These are design concepts, **not evidence that the repository implements all three strategies correctly**.
+
+## Important Kubernetes concepts
+
+### Rolling-update controls
+
+A Deployment can use `strategy.type: RollingUpdate`. Its `maxUnavailable` field limits how many desired replicas can be unavailable during the rollout; `maxSurge` controls how many extra Pods can be created above the desired replica count. Readiness is crucial because a running process is not necessarily ready for traffic.
+
+### Services, labels, and version routing
+
+A Kubernetes Service targets Pods through its selector. For blue-green deployment, a release switch can be modeled by selecting only the intended version. For a simple replica-based canary, a Service can select a common application label across both stable and canary Pods; this does not guarantee a fixed traffic percentage for every client/session.
+
+### Verification before rollback decisions
+
+A useful experiment would distinguish:
+- **Process failure:** crash and restart behavior.
+- **Readiness failure:** a Pod exists but should not receive Service traffic.
+- **Application failure:** health checks pass while the user-facing endpoint fails.
+- **Capacity regression:** requests slow down under CPU or replica constraints.
+
+All four are **proposed questions**, not findings from this repository.
+
+## What is in the repository?
+
+```text
+manifests/
+  rolling/        Deployment and Service sketch
+  bluegreen/      Versioned Deployment/Service sketches
+  kanary/         Stable/new-version sketch (historical spelling)
+spring-app/
+  app-v1/         Gitlink/submodule-style reference in the source tree
+  app-v2/         Minimal Spring Boot version endpoint and Dockerfile
+docs/
+  ORIGINAL_STUDY_PLAN.md   Original Korean two-week experiment plan
+```
+
+### Known gaps in current scaffolding
+
+Do **not** apply the manifests as a working tutorial without revision:
+
+1. Some Services forward to port **8090** while the container declaration exposes **8080**; actual app ports must be aligned.
+2. `manifests/bluegreen/service-v2.yaml` declares Service `apiVersion: v2`, which is not a valid core Service API version. Blue-green traffic selection is not properly expressed in the supplied Service definitions.
+3. The blue-green Services use the same name and an overly broad selector, so the files do not perform a verified version-specific traffic switch.
+4. The canary manifests use equal replicas for both versions; they do not demonstrate a deliberately small initial canary exposure.
+5. Image builds, registry access, probes, test workloads, rollback procedures, and a reproducible cluster environment are not documented or verified.
+
+## Proposed validation steps (not performed)
+
+1. Build and publish two distinguishable application images.
+2. Fix the image references, labels, Service selectors, and port mappings.
+3. Run each rollout variant on a disposable Kubernetes cluster.
+4. Generate concurrent requests and record response versions, errors, and latencies throughout rollout and rollback.
+5. Introduce readiness and application-level faults, then compare the observed impact.
+6. Save commands, events, logs, manifest revisions, and results before claiming any result.
+
+## References
+
+- [Kubernetes: Deployments and rolling updates](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
+- [Kubernetes: Services](https://kubernetes.io/docs/concepts/services-networking/service/)
+- [Kubernetes: Canary deployment tutorial](https://kubernetes.io/docs/tutorials/stateless-application/canary-deployment/)
+
+These official docs are useful for understanding the concepts. Any future implementation should follow the API and version guidance appropriate to the chosen cluster.
+
+## Portfolio note
+
+This is a **learning note**, not a production engineering project or a benchmark. The motivation is understanding how deployment strategies handle availability, failure, and safe change. The code and YAML are historical, incomplete drafts.
