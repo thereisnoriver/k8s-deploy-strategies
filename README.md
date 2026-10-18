@@ -1,82 +1,63 @@
 # Kubernetes Deployment Strategies — Study Notes
 
-**Status: conceptual study and unfinished example scaffolding — not an executed deployment experiment.**
+**Portfolio category:** Kubernetes learning notes, practical setup walkthroughs, and proposed deployment experiments. **Not a validated end-to-end deployment benchmark.**
 
-This repository collects notes on deployment and rollout strategies in Kubernetes. It was created to organize the ideas behind **rolling updates, blue-green deployment, and canary releases** and to plan possible failure and recovery experiments.
+This repository connects eight [original Korean technical blog posts](https://tyge-ottesen-brahe.tistory.com/category/Kubernetes) with an English study guide. The posts document conceptual study, Google Cloud / kubeadm practice-oriented walkthroughs, and rolling-update experiment planning. They **do not provide a complete, reproducible record of successful rolling, blue-green, or canary deployment tests**.
 
-There are some illustrative YAML manifests and a small Spring Boot `/version` endpoint, but **no verified Kubernetes cluster runs, rollout logs, fault-injection results, or measured performance data** are included. The original 14-day exercise schedule is preserved in [docs/ORIGINAL_STUDY_PLAN.md](docs/ORIGINAL_STUDY_PLAN.md) as a **plan, not a completion log**.
+## Read the notes
 
-## Strategy comparison
+| Topic | English note | Evidence level |
+| --- | --- | --- |
+| Containers and Kubernetes fundamentals | [Container orchestration and components](docs/01_CONTAINER_ORCHESTRATION.md) | Conceptual explanation |
+| Google Cloud and Kubernetes basics | [Cluster setup and basic workloads](docs/02_CLUSTER_SETUP.md) | Practical walkthrough notes; no preserved execution transcript |
+| Rolling, blue-green, and canary releases | [Deployment strategies](docs/03_DEPLOYMENT_STRATEGIES.md) | Conceptual comparison |
+| Failure and recovery testing | [Rolling-update experiment design](docs/04_ROLLING_UPDATE_EXPERIMENT_PLAN.md) | Proposed experiments / partial-progress notes; no recorded outcomes |
+| Learning schedule | [12-week roadmap](docs/ROADMAP.md) | Plan, not completion evidence |
+| Original repository checklist | [14-day plan (Korean)](docs/ORIGINAL_STUDY_PLAN.md) | Historical plan |
 
-| Strategy | Concept | Main trade-off | Validation question |
-| --- | --- | --- | --- |
-| **Rolling update** | Gradually replace old Pods with new Pods in a Deployment. | Trades rollout speed, temporary capacity, and availability; behavior depends on readiness and `maxSurge`/`maxUnavailable`. | When is an updated Pod actually ready to serve requests? |
-| **Blue-green** | Prepare a separate new version and switch the Service's target traffic after validation. | Fast switching/rollback is possible, but running both environments costs capacity and requires careful selector management. | Does the switch isolate users from an unhealthy release? |
-| **Canary** | Run a small new-version subset alongside the stable version and gradually expand exposure. | Reduces initial exposure but needs monitoring; basic Service/replica proportions are not precise per-user traffic guarantees. | What signals should block canary expansion or trigger rollback? |
+All eight source posts are linked individually in the respective notes.
 
-These are design concepts, **not evidence that the repository implements all three strategies correctly**.
+## Deployment strategies at a glance
 
-## Important Kubernetes concepts
+| Approach | How traffic changes | Main risk / trade-off |
+| --- | --- | --- |
+| **Rolling update** | A Deployment gradually replaces Pods; readiness and `maxSurge`/`maxUnavailable` constrain the process. | Availability is not automatic if health checks, capacity, or application compatibility are wrong. |
+| **Blue-green** | Deploy a distinct candidate environment, validate, then change which version receives traffic. | Requires sufficient capacity and carefully scoped traffic selectors; rollback depends on retaining the old environment. |
+| **Canary** | Introduce a new version to a limited share before expanding. | Replica counts alone do not guarantee exact request percentages or user cohorts. |
 
-### Rolling-update controls
-
-A Deployment can use `strategy.type: RollingUpdate`. Its `maxUnavailable` field limits how many desired replicas can be unavailable during the rollout; `maxSurge` controls how many extra Pods can be created above the desired replica count. Readiness is crucial because a running process is not necessarily ready for traffic.
-
-### Services, labels, and version routing
-
-A Kubernetes Service targets Pods through its selector. For blue-green deployment, a release switch can be modeled by selecting only the intended version. For a simple replica-based canary, a Service can select a common application label across both stable and canary Pods; this does not guarantee a fixed traffic percentage for every client/session.
-
-### Verification before rollback decisions
-
-A useful experiment would distinguish:
-- **Process failure:** crash and restart behavior.
-- **Readiness failure:** a Pod exists but should not receive Service traffic.
-- **Application failure:** health checks pass while the user-facing endpoint fails.
-- **Capacity regression:** requests slow down under CPU or replica constraints.
-
-All four are **proposed questions**, not findings from this repository.
-
-## What is in the repository?
+## Repository contents and limitations
 
 ```text
-manifests/
-  rolling/        Deployment and Service sketch
-  bluegreen/      Versioned Deployment/Service sketches
-  kanary/         Stable/new-version sketch (historical spelling)
-spring-app/
-  app-v1/         Gitlink/submodule-style reference in the source tree
-  app-v2/         Minimal Spring Boot version endpoint and Dockerfile
-docs/
-  ORIGINAL_STUDY_PLAN.md   Original Korean two-week experiment plan
+docs/                  English notes, source links, and historical plans
+manifests/rolling/     Historical Deployment and Service example
+manifests/bluegreen/   Historical versioned examples
+manifests/kanary/      Historical canary example (original directory spelling)
+spring-app/app-v1/     Gitlink in the original source tree
+spring-app/app-v2/     Small Spring Boot /version endpoint
 ```
 
-### Known gaps in current scaffolding
+The source-code and manifest directories are **incomplete learning scaffolding**, not runnable reference architecture. Known issues include:
 
-Do **not** apply the manifests as a working tutorial without revision:
+- Example Services target **8090**, while the corresponding container declarations show **8080**; verify the *actual application listening port* before changing either.
+- One blue-green Service uses invalid `apiVersion: v2` instead of `v1`; the Services also have conflicting names / selectors and do not demonstrate controlled blue-green switching.
+- The canary examples use equal replica counts and do not establish limited or weighted rollout traffic.
+- No repeatable cluster configuration, successful rollout output, failure-injection logs, latency data, or production validation has been committed.
 
-1. Some Services forward to port **8090** while the container declaration exposes **8080**; actual app ports must be aligned.
-2. `manifests/bluegreen/service-v2.yaml` declares Service `apiVersion: v2`, which is not a valid core Service API version. Blue-green traffic selection is not properly expressed in the supplied Service definitions.
-3. The blue-green Services use the same name and an overly broad selector, so the files do not perform a verified version-specific traffic switch.
-4. The canary manifests use equal replicas for both versions; they do not demonstrate a deliberately small initial canary exposure.
-5. Image builds, registry access, probes, test workloads, rollback procedures, and a reproducible cluster environment are not documented or verified.
+These limitations are intentional disclosures, **not claims that the proposed experiments were completed**.
 
-## Proposed validation steps (not performed)
+## How I would validate the examples next
 
-1. Build and publish two distinguishable application images.
-2. Fix the image references, labels, Service selectors, and port mappings.
-3. Run each rollout variant on a disposable Kubernetes cluster.
-4. Generate concurrent requests and record response versions, errors, and latencies throughout rollout and rollback.
-5. Introduce readiness and application-level faults, then compare the observed impact.
-6. Save commands, events, logs, manifest revisions, and results before claiming any result.
+1. Build two distinguishable images and fix Service ports, labels, selectors, and manifest API versions.
+2. Reproduce a disposable cluster environment, documenting versions and commands.
+3. Add suitable readiness probes and verify endpoint behavior while changing `maxSurge` and `maxUnavailable`.
+4. Record requests, errors, Pod transitions, and rollback behavior; compare against expectations.
+5. Add blue-green traffic switching and a clearly defined canary traffic-routing method only after the rolling baseline works.
 
 ## References
 
-- [Kubernetes: Deployments and rolling updates](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
-- [Kubernetes: Services](https://kubernetes.io/docs/concepts/services-networking/service/)
-- [Kubernetes: Canary deployment tutorial](https://kubernetes.io/docs/tutorials/stateless-application/canary-deployment/)
+- [Kubernetes Components](https://kubernetes.io/docs/concepts/overview/components/)
+- [Deployments and rolling updates](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
+- [Services](https://kubernetes.io/docs/concepts/services-networking/service/)
+- [Kubernetes canary tutorial](https://kubernetes.io/docs/tutorials/stateless-application/canary-deployment/)
 
-These official docs are useful for understanding the concepts. Any future implementation should follow the API and version guidance appropriate to the chosen cluster.
-
-## Portfolio note
-
-This is a **learning note**, not a production engineering project or a benchmark. The motivation is understanding how deployment strategies handle availability, failure, and safe change. The code and YAML are historical, incomplete drafts.
+**Scope:** Independent study and documentation. Neither this README nor the blog series should be interpreted as production deployment experience.
